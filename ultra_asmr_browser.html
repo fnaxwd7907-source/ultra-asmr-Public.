@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ultra ASMR Microphone</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0c0b14;color:#f5f2ff;font-family:system-ui,Arial;padding:18px}
+main{max-width:650px;margin:auto}.hero,.panel{border:1px solid #373044;border-radius:18px;padding:18px;margin:13px 0;background:#171421}
+.hero{text-align:center;background:linear-gradient(140deg,#30204d,#111321)}h1{font-size:25px;margin:8px}p,.hint{color:#c3bbd3;font-size:14px;line-height:1.6}
+button,select{font:inherit;border:1px solid #514565;border-radius:12px;padding:12px;background:#242033;color:white;width:100%;margin:5px 0}
+button.primary{background:#7652c5;border-color:#7652c5;font-weight:700}button:disabled{opacity:.45}
+label{display:block;margin:12px 0 5px}input[type=range]{width:100%;accent-color:#a78bfa}
+.row{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.meter{height:12px;background:#373044;border-radius:20px;overflow:hidden}.meter span{display:block;width:0;height:100%;background:linear-gradient(90deg,#36c99b,#e3c44b)}
+#timer{font-size:35px;font-variant-numeric:tabular-nums}.status{font-size:14px;color:#d4c5ff}audio{width:100%;margin-top:12px}
+</style></head>
+<body><main>
+<div class="hero"><div style="font-size:42px">🎙️</div><h1>ULTRA ASMR MICROPHONE</h1><div class="status" id="status">جاهز — وصّل السماعة ثم اضغط اتصال</div><div id="timer">00:00</div></div>
+<section class="panel"><h3>🎧 توصيل الميكروفون</h3>
+<p>أدخل سماعة 3.5 مم التي تحتوي على ميكروفون قبل الضغط على الاتصال. اسمح للمتصفح باستخدام الميكروفون.</p>
+<button class="primary" id="connect">اتصال بالميكروفون</button>
+<label for="device">مصدر الإدخال</label><select id="device"><option value="">اتصل أولاً</option></select>
+<p class="hint" id="deviceHint">قد يختار أندرويد ميكروفون السماعة تلقائياً دون إظهار اسم منفصل.</p></section>
+<section class="panel"><h3>🔬 الحساسية والتضخيم</h3>
+<label>مستوى التضخيم: <b id="gainVal">1×</b></label><input id="gain" type="range" min="1" max="12" step=".5" value="1">
+<label>مستوى الصوت المباشر: <b id="volVal">0%</b></label><div class="meter"><span id="meter"></span></div>
+<label><input id="monitor" type="checkbox"> الاستماع المباشر عبر السماعة (قد يحدث تأخير)</label>
+<p class="hint">التضخيم يرفع الصوت والضجيج معاً، ولا يستطيع إنشاء تفاصيل لم يلتقطها الميكروفون.</p></section>
+<section class="panel"><h3>⏺️ التسجيل</h3><div class="row"><button class="primary" id="record" disabled>● تسجيل</button><button id="pause" disabled>إيقاف مؤقت</button><button id="stop" disabled>إنهاء</button></div>
+<div id="recStatus" class="hint">لم يبدأ التسجيل بعد</div><audio id="player" controls hidden></audio><button id="download" disabled>⬇ حفظ التسجيل</button></section>
+</main>
+<script>
+(()=> {
+const $=id=>document.getElementById(id);
+let stream=null,ctx=null,source=null,gainNode=null,analyser=null,monitorGain=null,dest=null,recorder=null,chunks=[],recordedBlob=null,raf=0,timer=null,started=0,elapsed=0;
+function say(s){$('status').textContent=s}
+function clock(n){return String(Math.floor(n/60)).padStart(2,'0')+':'+String(Math.floor(n%60)).padStart(2,'0')}
+async function refreshDevices(){
+ const ds=await navigator.mediaDevices.enumerateDevices();const inputs=ds.filter(d=>d.kind==='audioinput');const sel=$('device');sel.innerHTML='';
+ inputs.forEach((d,i)=>{const o=document.createElement('option');o.value=d.deviceId;o.textContent=d.label||`ميكروفون ${i+1}`;sel.append(o)});
+ if(!inputs.length){const o=document.createElement('option');o.textContent='لم يتم العثور على مدخل صوت';sel.append(o)}
+}
+function buildGraph(){
+ source=ctx.createMediaStreamSource(stream);gainNode=ctx.createGain();analyser=ctx.createAnalyser();analyser.fftSize=1024;
+ monitorGain=ctx.createGain();dest=ctx.createMediaStreamDestination();
+ source.connect(gainNode);gainNode.connect(analyser);analyser.connect(dest);analyser.connect(monitorGain);monitorGain.connect(ctx.destination);
+ gainNode.gain.value=Number($('gain').value);monitorGain.gain.value=0;
+ const data=new Uint8Array(analyser.fftSize);
+ const draw=()=>{if(!analyser)return;analyser.getByteTimeDomainData(data);let sum=0;for(const x of data)sum+=(x-128)**2;const v=Math.min(100,Math.sqrt(sum/data.length)*1.5);$('meter').style.width=v+'%';$('volVal').textContent=Math.round(v)+'%';raf=requestAnimationFrame(draw)};cancelAnimationFrame(raf);draw();
+}
+async function connect(deviceId){
+ if(!navigator.mediaDevices?.getUserMedia)throw Error('المتصفح لا يدعم الميكروفون. افتح الصفحة في Chrome عبر HTTPS واسمح بالوصول للميكروفون.');
+ if(!window.isSecureContext)throw Error('يلزم فتح الصفحة عبر HTTPS أو localhost للسماح بالميكروفون.');
+ if(stream)stream.getTracks().forEach(t=>t.stop());
+ const audio=deviceId?{deviceId:{exact:deviceId},echoCancellation:false,noiseSuppression:false,autoGainControl:false}:{echoCancellation:false,noiseSuppression:false,autoGainControl:false};
+ stream=await navigator.mediaDevices.getUserMedia({audio,video:false});
+ if(ctx)await ctx.close();ctx=new(window.AudioContext||window.webkitAudioContext)();await ctx.resume();buildGraph();await refreshDevices();
+ $('record').disabled=false;say('الميكروفون متصل — جرّب الهمس أو النقر بهدوء');
+}
+$('connect').onclick=async()=>{try{await connect();}catch(e){say(e.name==='NotAllowedError'?'تم رفض إذن الميكروفون. اسمح به من إعدادات الموقع في Chrome.':e.message)}};
+$('device').onchange=async()=>{if(!$('device').value)return;try{await connect($('device').value)}catch(e){say('تعذر اختيار هذا المدخل: '+e.message)}};
+$('gain').oninput=()=>{$('gainVal').textContent=$('gain').value+'×';if(gainNode)gainNode.gain.setTargetAtTime(Number($('gain').value),ctx.currentTime,.03)};
+$('monitor').onchange=()=>{if(monitorGain)monitorGain.gain.setTargetAtTime($('monitor').checked?.35:0,ctx.currentTime,.05)};
+$('record').onclick=()=>{
+ try{if(!stream||!dest)throw Error('اتصل بالميكروفون أولاً');if(!window.MediaRecorder)throw Error('التسجيل غير مدعوم في هذا المتصفح.');
+ if(recorder&&recorder.state==='paused'){recorder.resume();started=Date.now();$('record').disabled=true;$('pause').textContent='إيقاف مؤقت';return}
+ chunks=[];recordedBlob=null;const mime=['audio/webm;codecs=opus','audio/ogg;codecs=opus'].find(t=>MediaRecorder.isTypeSupported(t));
+ recorder=new MediaRecorder(dest.stream,mime?{mimeType:mime}:undefined);
+ recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
+ recorder.onstop=()=>{recordedBlob=new Blob(chunks,{type:recorder.mimeType||'audio/webm'});const url=URL.createObjectURL(recordedBlob);$('player').src=url;$('player').hidden=false;$('download').disabled=false;$('recStatus').textContent='اكتمل التسجيل · '+(recordedBlob.size/1024).toFixed(1)+' كيلوبايت'};
+ recorder.start(500);elapsed=0;started=Date.now();timer=setInterval(()=>$('timer').textContent=clock(elapsed+(recorder.state==='recording'?(Date.now()-started)/1000:0)),250);
+ $('record').disabled=true;$('pause').disabled=false;$('stop').disabled=false;$('recStatus').textContent='🔴 يجري تسجيل الصوت';say('تسجيل جارٍ');
+ }catch(e){$('recStatus').textContent=e.message}
+};
+$('pause').onclick=()=>{if(recorder?.state==='recording'){elapsed+=(Date.now()-started)/1000;recorder.pause();$('record').disabled=false;$('pause').textContent='استئناف'}else if(recorder?.state==='paused'){recorder.resume();started=Date.now();$('record').disabled=true;$('pause').textContent='إيقاف مؤقت'}};
+$('stop').onclick=()=>{if(recorder&&recorder.state!=='inactive'){if(recorder.state==='recording')elapsed+=(Date.now()-started)/1000;recorder.stop();clearInterval(timer);$('timer').textContent=clock(elapsed);$('record').disabled=false;$('pause').disabled=true;$('stop').disabled=true;$('pause').textContent='إيقاف مؤقت';say('انتهى التسجيل')}};
+$('download').onclick=()=>{if(!recordedBlob)return;const a=document.createElement('a');const url=URL.createObjectURL(recordedBlob);a.href=url;a.download='ASMR-recording.webm';a.click();setTimeout(()=>URL.revokeObjectURL(url),3000)};
+})();
+</script></body></html>
